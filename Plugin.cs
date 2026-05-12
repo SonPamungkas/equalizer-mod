@@ -30,6 +30,31 @@ namespace EqualizerMod
         }
     }
 
+    [HarmonyPatch(typeof(FactionHQ), "AddSupplyUnit")]
+    public static class FactionHQ_AddSupplyUnit_Patch
+    {
+        private static bool _isEqualizing = false;
+
+        public static void Postfix(FactionHQ __instance, UnitDefinition unitDefinition, int amount)
+        {
+            // Avoid infinite recursion and only process positive additions
+            if (_isEqualizing || amount <= 0) return;
+
+            // We only care about aircraft
+            if (!(unitDefinition is AircraftDefinition aircraftDefinition)) return;
+
+            _isEqualizing = true;
+            try
+            {
+                EqualizerLogic.EqualizeProduction(__instance, aircraftDefinition, amount);
+            }
+            finally
+            {
+                _isEqualizing = false;
+            }
+        }
+    }
+
     public class AircraftTierInfo
     {
         public int Rank;
@@ -150,6 +175,41 @@ namespace EqualizerMod
                         Debug.Log($"[EqualizerMod] Modded {modded.unitName} already has enough airframes ({currentModdedCount} >= {minVanillaCount})");
                     }
                 }
+            }
+        }
+
+        public static void EqualizeProduction(FactionHQ hq, AircraftDefinition aircraftDefinition, int amount)
+        {
+            if (hq == null || aircraftDefinition == null || aircraftDefinition.aircraftParameters == null) return;
+
+            // Ensure we have scanned the aircraft
+            if (TierInfoMap.Count == 0)
+            {
+                ScanAircraft();
+            }
+
+            // Check if the aircraft that received delivery is vanilla
+            string key = aircraftDefinition.jsonKey.ToLower();
+            if (!VanillaKeys.Contains(key)) return;
+
+            int rank = aircraftDefinition.aircraftParameters.rankRequired;
+            if (!TierInfoMap.ContainsKey(rank)) return;
+
+            var tier = TierInfoMap[rank];
+            if (tier.ModdedAircraft.Count == 0) return;
+
+            Debug.Log($"[EqualizerMod] Vanilla delivery detected: {aircraftDefinition.unitName} (+{amount}). Equalizing Rank {rank} modded aircraft production.");
+
+            foreach (var modded in tier.ModdedAircraft)
+            {
+                // Unrestrict if necessary (re-applying the fix from inventory equalization)
+                if (hq.restrictedAircraft != null && hq.restrictedAircraft.Contains(modded.jsonKey))
+                {
+                    hq.restrictedAircraft.Remove(modded.jsonKey);
+                }
+
+                Debug.Log($"[EqualizerMod] Delivering modded aircraft: {modded.unitName} (+{amount})");
+                hq.AddSupplyUnit(modded, amount);
             }
         }
     }
