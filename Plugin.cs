@@ -10,13 +10,48 @@ namespace EqualizerMod
     public class EqualizerPlugin : BaseUnityPlugin
     {
         public static EqualizerPlugin Instance;
+        public static BepInEx.Configuration.ConfigEntry<bool> EqualizeEnabled;
+        public static Dictionary<string, BepInEx.Configuration.ConfigEntry<bool>> AircraftToggles = new Dictionary<string, BepInEx.Configuration.ConfigEntry<bool>>();
+
+        private bool _initialScanDone = false;
 
         private void Awake()
         {
             Instance = this;
+            
+            EqualizeEnabled = Config.Bind("General", "Equalize Enabled", true, "Global toggle for the equalization logic.");
+
             var harmony = new Harmony("com.raksaputra.equalizermod");
             harmony.PatchAll();
             Logger.LogInfo("Equalizer Mod loaded!");
+        }
+
+        private void Update()
+        {
+            // Perform an initial scan after a few seconds to populate the config menu with modded aircraft
+            if (!_initialScanDone && Time.time > 10f)
+            {
+                EqualizerLogic.ScanAircraft();
+                _initialScanDone = true;
+                Logger.LogInfo("Initial aircraft scan complete. Configuration toggles should be available.");
+            }
+        }
+
+        public bool IsAircraftEnabled(AircraftDefinition ac)
+        {
+            if (ac == null) return false;
+            string key = ac.jsonKey.ToLower();
+
+            // Toggle per modded aircraft. Vanilla are always "enabled" for comparison.
+            if (EqualizerLogic.IsVanilla(ac)) return true;
+
+            if (!AircraftToggles.ContainsKey(key))
+            {
+                Debug.Log($"[EqualizerMod] Binding new config toggle for: {ac.unitName} ({ac.jsonKey})");
+                AircraftToggles[key] = Config.Bind("Toggles - Aircraft", $"Equalize {ac.unitName}", true, $"Enable or disable equalization for {ac.unitName} ({ac.jsonKey}).");
+            }
+
+            return AircraftToggles[key].Value;
         }
     }
 
@@ -74,6 +109,12 @@ namespace EqualizerMod
             "smallfighter1", "quadvtol1", "multirole1", "ew1", "darkreach", "fastbomber1"
         };
 
+        public static bool IsVanilla(AircraftDefinition ac)
+        {
+            if (ac == null) return false;
+            return VanillaKeys.Contains(ac.jsonKey.ToLower());
+        }
+
         public static void ScanAircraft()
         {
             Debug.Log("[EqualizerMod] Scanning for aircraft definitions...");
@@ -85,8 +126,7 @@ namespace EqualizerMod
                 if (ac.aircraftParameters == null) continue;
 
                 int rank = ac.aircraftParameters.rankRequired;
-                string key = ac.jsonKey.ToLower();
-                bool isModded = !VanillaKeys.Contains(key);
+                bool isModded = !IsVanilla(ac);
 
                 if (!TierInfoMap.ContainsKey(rank))
                 {
@@ -97,6 +137,9 @@ namespace EqualizerMod
                 {
                     TierInfoMap[rank].ModdedAircraft.Add(ac);
                     Debug.Log($"[EqualizerMod] Found Modded: {ac.unitName} (Key: {ac.jsonKey}, Rank: {rank})");
+                    
+                    // Register the toggle in ConfigurationManager
+                    EqualizerPlugin.Instance.IsAircraftEnabled(ac);
                 }
                 else
                 {
@@ -113,6 +156,8 @@ namespace EqualizerMod
 
         public static void EqualizeInventory(FactionHQ hq)
         {
+            if (EqualizerPlugin.EqualizeEnabled != null && !EqualizerPlugin.EqualizeEnabled.Value) return;
+
             if (hq == null || hq.faction == null) return;
 
             // Ensure we have scanned the aircraft
@@ -155,6 +200,13 @@ namespace EqualizerMod
                 // Equalize modded aircraft
                 foreach (var modded in tier.ModdedAircraft)
                 {
+                    // Check individual aircraft toggle
+                    if (!EqualizerPlugin.Instance.IsAircraftEnabled(modded))
+                    {
+                        Debug.Log($"[EqualizerMod] {modded.unitName} is blacklisted (disabled in config). Skipping.");
+                        continue;
+                    }
+
                     // If the modded aircraft is in the restricted list, remove it
                     if (hq.restrictedAircraft != null && hq.restrictedAircraft.Contains(modded.jsonKey))
                     {
@@ -180,6 +232,8 @@ namespace EqualizerMod
 
         public static void EqualizeProduction(FactionHQ hq, AircraftDefinition aircraftDefinition, int amount)
         {
+            if (EqualizerPlugin.EqualizeEnabled != null && !EqualizerPlugin.EqualizeEnabled.Value) return;
+
             if (hq == null || aircraftDefinition == null || aircraftDefinition.aircraftParameters == null) return;
 
             // Ensure we have scanned the aircraft
@@ -202,6 +256,12 @@ namespace EqualizerMod
 
             foreach (var modded in tier.ModdedAircraft)
             {
+                // Check individual aircraft toggle
+                if (!EqualizerPlugin.Instance.IsAircraftEnabled(modded))
+                {
+                    continue;
+                }
+
                 // Unrestrict if necessary (re-applying the fix from inventory equalization)
                 if (hq.restrictedAircraft != null && hq.restrictedAircraft.Contains(modded.jsonKey))
                 {
