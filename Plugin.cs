@@ -12,6 +12,7 @@ namespace EqualizerMod
         public static EqualizerPlugin Instance;
         public static BepInEx.Configuration.ConfigEntry<bool> EqualizeEnabled;
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<bool>> AircraftToggles = new Dictionary<string, BepInEx.Configuration.ConfigEntry<bool>>();
+        public static Dictionary<string, BepInEx.Configuration.ConfigEntry<int>> FactionRestrictions = new Dictionary<string, BepInEx.Configuration.ConfigEntry<int>>();
 
         private bool _initialScanDone = false;
 
@@ -24,6 +25,37 @@ namespace EqualizerMod
             var harmony = new Harmony("com.raksaputra.equalizermod");
             harmony.PatchAll();
             Logger.LogInfo("Equalizer Mod loaded!");
+        }
+
+        public bool IsFactionAllowed(AircraftDefinition ac, FactionHQ hq)
+        {
+            if (ac == null || hq == null || hq.faction == null) return false;
+            string key = ac.jsonKey.ToLower();
+
+            // Register configs if they don't exist
+            if (!AircraftToggles.ContainsKey(key))
+            {
+                IsAircraftEnabled(ac); // This will bind both if needed
+            }
+
+            // Check if global equalize for this aircraft is enabled
+            if (!AircraftToggles[key].Value) return false;
+
+            // Check faction restriction slider
+            int restriction = FactionRestrictions[key].Value;
+            if (restriction == 0) return true; // Both allowed
+
+            string factionName = hq.faction.factionName.ToLower();
+            
+            // 1 = No PALA (BDF exclusive)
+            if (restriction == 1 && (factionName.Contains("primeva") || factionName.Contains("pala"))) 
+                return false; 
+
+            // 2 = No BDF (PALA exclusive)
+            if (restriction == 2 && (factionName.Contains("boscali") || factionName.Contains("bdf"))) 
+                return false; 
+
+            return true;
         }
 
         private void Update()
@@ -47,8 +79,13 @@ namespace EqualizerMod
 
             if (!AircraftToggles.ContainsKey(key))
             {
-                Debug.Log($"[EqualizerMod] Binding new config toggle for: {ac.unitName} ({ac.jsonKey})");
+                Debug.Log($"[EqualizerMod] Binding new config toggles for: {ac.unitName} ({ac.jsonKey})");
                 AircraftToggles[key] = Config.Bind("Toggles - Aircraft", $"Equalize {ac.unitName}", true, $"Enable or disable equalization for {ac.unitName} ({ac.jsonKey}).");
+                
+                // Add faction restriction slider: 0 = Both, 1 = No PALA, 2 = No BDF
+                FactionRestrictions[key] = Config.Bind("Toggles - Faction Restriction", $"{ac.unitName} Restriction", 0, 
+                    new BepInEx.Configuration.ConfigDescription($"Restriction for {ac.unitName}: 0=Both, 1=No PALA (Primeva), 2=No BDF (Boscali)", 
+                    new BepInEx.Configuration.AcceptableValueRange<int>(0, 2)));
             }
 
             return AircraftToggles[key].Value;
@@ -200,10 +237,9 @@ namespace EqualizerMod
                 // Equalize modded aircraft
                 foreach (var modded in tier.ModdedAircraft)
                 {
-                    // Check individual aircraft toggle
-                    if (!EqualizerPlugin.Instance.IsAircraftEnabled(modded))
+                    // Check individual aircraft toggle and faction restriction
+                    if (!EqualizerPlugin.Instance.IsFactionAllowed(modded, hq))
                     {
-                        Debug.Log($"[EqualizerMod] {modded.unitName} is blacklisted (disabled in config). Skipping.");
                         continue;
                     }
 
@@ -256,8 +292,8 @@ namespace EqualizerMod
 
             foreach (var modded in tier.ModdedAircraft)
             {
-                // Check individual aircraft toggle
-                if (!EqualizerPlugin.Instance.IsAircraftEnabled(modded))
+                // Check individual aircraft toggle and faction restriction
+                if (!EqualizerPlugin.Instance.IsFactionAllowed(modded, hq))
                 {
                     continue;
                 }
