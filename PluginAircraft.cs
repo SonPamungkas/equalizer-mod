@@ -13,6 +13,7 @@ namespace EqualizerMod
         public static BepInEx.Configuration.ConfigEntry<bool> EqualizeEnabled;
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<bool>> AircraftToggles = new Dictionary<string, BepInEx.Configuration.ConfigEntry<bool>>();
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<int>> FactionRestrictions = new Dictionary<string, BepInEx.Configuration.ConfigEntry<int>>();
+        public static Dictionary<string, BepInEx.Configuration.ConfigEntry<float>> EqualizeMultipliers = new Dictionary<string, BepInEx.Configuration.ConfigEntry<float>>();
 
         private bool _initialScanDone = false;
 
@@ -74,6 +75,10 @@ namespace EqualizerMod
                 FactionRestrictions[key] = Config.Bind("Toggles - Faction Restriction", $"{ac.unitName} Restriction", 0, 
                     new BepInEx.Configuration.ConfigDescription($"Restriction for {ac.unitName}: 0=Both, 1=No PALA, 2=No BDF", 
                     new BepInEx.Configuration.AcceptableValueRange<int>(0, 2)));
+
+                EqualizeMultipliers[key] = Config.Bind("Multipliers - Aircraft", $"{ac.unitName} Multiplier", 1.0f,
+                    new BepInEx.Configuration.ConfigDescription($"Equalization multiplier for {ac.unitName} (0-10)",
+                    new BepInEx.Configuration.AcceptableValueRange<float>(0f, 10f)));
             }
 
             return AircraftToggles[key].Value;
@@ -194,9 +199,17 @@ namespace EqualizerMod
                     if (hq.restrictedAircraft != null && hq.restrictedAircraft.Contains(modded.jsonKey))
                         hq.restrictedAircraft.Remove(modded.jsonKey);
 
+                    string modKey = modded.jsonKey.ToLower();
+                    float multiplier = 1.0f;
+                    if (EqualizerPlugin.EqualizeMultipliers.ContainsKey(modKey))
+                    {
+                        multiplier = EqualizerPlugin.EqualizeMultipliers[modKey].Value;
+                    }
+
+                    int targetCount = Mathf.RoundToInt(minVanillaCount * multiplier);
                     int currentCount = hq.GetUnitSupply(modded);
-                    if (currentCount < minVanillaCount)
-                        hq.AddSupplyUnit(modded, minVanillaCount - currentCount);
+                    if (currentCount < targetCount)
+                        hq.AddSupplyUnit(modded, targetCount - currentCount);
                 }
             }
         }
@@ -221,7 +234,18 @@ namespace EqualizerMod
                 if (hq.restrictedAircraft != null && hq.restrictedAircraft.Contains(modded.jsonKey))
                     hq.restrictedAircraft.Remove(modded.jsonKey);
 
-                hq.AddSupplyUnit(modded, amount);
+                string modKey = modded.jsonKey.ToLower();
+                float multiplier = 1.0f;
+                if (EqualizerPlugin.EqualizeMultipliers.ContainsKey(modKey))
+                {
+                    multiplier = EqualizerPlugin.EqualizeMultipliers[modKey].Value;
+                }
+
+                int addAmount = Mathf.RoundToInt(amount * multiplier);
+                if (addAmount > 0)
+                {
+                    hq.AddSupplyUnit(modded, addAmount);
+                }
             }
         }
     }
