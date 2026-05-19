@@ -15,6 +15,7 @@ namespace EqualizerGroundMod
         public static BepInEx.Configuration.ConfigEntry<float> GroundDelayMultiplier;
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<bool>> VehicleToggles = new Dictionary<string, BepInEx.Configuration.ConfigEntry<bool>>();
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<int>> FactionRestrictions = new Dictionary<string, BepInEx.Configuration.ConfigEntry<int>>();
+        public static Dictionary<string, BepInEx.Configuration.ConfigEntry<float>> VehicleMultipliers = new Dictionary<string, BepInEx.Configuration.ConfigEntry<float>>();
 
         private bool _initialScanDone = false;
 
@@ -55,6 +56,10 @@ namespace EqualizerGroundMod
                 FactionRestrictions[key] = Config.Bind("Toggles - Ground Faction Restriction", $"{vd.unitName} Restriction", 0, 
                     new BepInEx.Configuration.ConfigDescription($"Restriction for {vd.unitName}: 0=Both, 1=No PALA, 2=No BDF", 
                     new BepInEx.Configuration.AcceptableValueRange<int>(0, 2)));
+
+                VehicleMultipliers[key] = Config.Bind("Multipliers - Ground Vehicles", $"{vd.unitName} Multiplier", 1.0f,
+                    new BepInEx.Configuration.ConfigDescription($"Equalization multiplier for {vd.unitName} (0-10)",
+                    new BepInEx.Configuration.AcceptableValueRange<float>(0f, 10f)));
             }
 
             return VehicleToggles[key].Value;
@@ -160,13 +165,24 @@ namespace EqualizerGroundMod
 
             if (hq == null || modded == null || vanilla == null) yield break;
 
+            string modKey = modded.jsonKey.ToLower();
+            float multiplier = 1.0f;
+            if (EqualizerGroundPlugin.VehicleMultipliers.ContainsKey(modKey))
+            {
+                multiplier = EqualizerGroundPlugin.VehicleMultipliers[modKey].Value;
+            }
+
             int vanillaStock = hq.GetUnitSupply(vanilla);
             int moddedStock = hq.GetUnitSupply(modded);
 
-            if (moddedStock < vanillaStock)
+            int targetCap = Mathf.RoundToInt(vanillaStock * multiplier);
+            int addedAmount = Mathf.RoundToInt(1.0f * multiplier);
+
+            if (moddedStock < targetCap && addedAmount > 0)
             {
-                Debug.Log($"[EqualizerGround] Ground delivery: adding 1x {modded.unitName} to {hq.faction.factionName}");
-                hq.AddSupplyUnit(modded, 1);
+                int finalAdd = Mathf.Min(addedAmount, targetCap - moddedStock);
+                Debug.Log($"[EqualizerGround] Ground delivery: adding {finalAdd}x {modded.unitName} to {hq.faction.factionName}");
+                hq.AddSupplyUnit(modded, finalAdd);
             }
         }
 
@@ -183,10 +199,18 @@ namespace EqualizerGroundMod
                 {
                     if (!EqualizerGroundPlugin.Instance.IsFactionAllowed(modded, hq)) continue;
 
-                    int moddedStock = hq.GetUnitSupply(modded);
-                    if (moddedStock < vanillaStock)
+                    string modKey = modded.jsonKey.ToLower();
+                    float multiplier = 1.0f;
+                    if (EqualizerGroundPlugin.VehicleMultipliers.ContainsKey(modKey))
                     {
-                        hq.AddSupplyUnit(modded, vanillaStock - moddedStock);
+                        multiplier = EqualizerGroundPlugin.VehicleMultipliers[modKey].Value;
+                    }
+
+                    int targetCap = Mathf.RoundToInt(vanillaStock * multiplier);
+                    int moddedStock = hq.GetUnitSupply(modded);
+                    if (moddedStock < targetCap)
+                    {
+                        hq.AddSupplyUnit(modded, targetCap - moddedStock);
                     }
                 }
             }
