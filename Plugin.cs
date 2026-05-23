@@ -12,7 +12,7 @@ namespace EqualizerGroundMod
     {
         public static EqualizerGroundPlugin Instance;
         public static BepInEx.Configuration.ConfigEntry<bool> EqualizeEnabled;
-        public static BepInEx.Configuration.ConfigEntry<float> GroundDelayMultiplier;
+        public static BepInEx.Configuration.ConfigEntry<bool> VerboseLogging;
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<int>> FactionRestrictions = new Dictionary<string, BepInEx.Configuration.ConfigEntry<int>>();
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<float>> VehicleMultipliers = new Dictionary<string, BepInEx.Configuration.ConfigEntry<float>>();
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<string>> LinkedVanillaUnits = new Dictionary<string, BepInEx.Configuration.ConfigEntry<string>>();
@@ -24,7 +24,7 @@ namespace EqualizerGroundMod
             Instance = this;
             
             EqualizeEnabled = Config.Bind("General", "Equalize Enabled", true, "Global toggle for the ground vehicle equalization logic.");
-            GroundDelayMultiplier = Config.Bind("Ground Equalizer", "Production Delay Multiplier", 0.5f, "Delay added to modded ground vehicle production, as a multiplier of the factory's production interval (e.g. 0.5 = half the factory speed).");
+            VerboseLogging = Config.Bind("General", "Verbose Logging", false, "Enable verbose logging for deliveries and spawns.");
 
             var harmony = new Harmony("com.equalizer.ground");
             harmony.PatchAll();
@@ -93,18 +93,25 @@ namespace EqualizerGroundMod
         public static Dictionary<string, VehicleDefinition> VanillaVehicleDict = new Dictionary<string, VehicleDefinition>();
         public static List<string> VanillaVehicleNames = new List<string>();
         public static List<VehicleDefinition> ModdedVehiclesList = new List<VehicleDefinition>();
+        public static Dictionary<VehicleDefinition, string> ModdedKeys = new Dictionary<VehicleDefinition, string>();
 
         private static readonly HashSet<string> VanillaVehicleKeys = new HashSet<string>
         {
-            "truck", "tank", "apc", "mobile_sam", "mobile_aaa", "mobile_radar",
-            "jeep", "ifv", "scout_car"
+            "horse1", "6x6_1_at", "hlt-ft", "cramtrailer1", "ugvdozer1", "afv8_sam",
+            "truck2-rsam", "6x6_1_aa", "lighttruck1_aa", "hlt-m", "truck2-fc", "afv8_ifv",
+            "mbt1", "linebreaker_ifv", "linebreaker_apc", "linebreaker_sam", "spaag2",
+            "truck2-mrap", "lighttruck1_at", "truck2-ft", "truck2-m", "truck2-l", "radarsam1",
+            "hlt-t", "truck2-t", "hlt-l", "lcv45", "ugv1_grenade", "6x6_1_apc", "6x6_1_ifv",
+            "ugv1_sam", "hlt-fc", "afv8_apc", "samturret1", "spaag1", "mbt", "samtrailer1",
+            "radarcontainer1", "lasertrailer1", "hlt-r", "truck2-lads", "truck2-r", "truck2-cram",
+            "truck2-tbm", "truck2-tbm-n"
         };
 
         public static bool IsVanilla(VehicleDefinition vd)
         {
             if (vd == null) return false;
-            string key = vd.jsonKey.ToLower();
-            return VanillaVehicleKeys.Contains(key) || (key.Length < 15 && !key.Contains("_") && !key.Contains("."));
+            string prefabName = vd.unitPrefab != null ? vd.unitPrefab.name.ToLower() : vd.jsonKey.ToLower();
+            return VanillaVehicleKeys.Contains(prefabName);
         }
 
         public static string GetVehicleDisplayName(VehicleDefinition vd)
@@ -138,6 +145,7 @@ namespace EqualizerGroundMod
 
             foreach (var modded in ModdedVehiclesList)
             {
+                ModdedKeys[modded] = modded.jsonKey.ToLower();
                 // Trigger config generation for modded vehicles
                 EqualizerGroundPlugin.Instance.InitializeVehicleConfig(modded);
             }
@@ -155,47 +163,35 @@ namespace EqualizerGroundMod
             if (factory.attachedUnit != null) hq = factory.attachedUnit.NetworkHQ;
             if (hq == null) return;
 
-            float interval = factory.ProductionInterval;
-            float delay = interval * EqualizerGroundPlugin.GroundDelayMultiplier.Value;
-
             foreach (var modded in ModdedVehiclesList)
             {
-                string key = modded.jsonKey.ToLower();
+                string key = ModdedKeys[modded];
                 if (!EqualizerGroundPlugin.LinkedVanillaUnits.ContainsKey(key)) continue;
                 
                 string linkedVanillaName = EqualizerGroundPlugin.LinkedVanillaUnits[key].Value;
                 if (linkedVanillaName != vanillaDispName) continue;
 
                 if (!EqualizerGroundPlugin.Instance.IsFactionAllowed(modded, hq)) continue;
-                EqualizerGroundPlugin.Instance.StartCoroutine(DelayedDelivery(hq, modded, vanillaDef, delay));
-            }
-        }
 
-        private static IEnumerator DelayedDelivery(FactionHQ hq, VehicleDefinition modded, VehicleDefinition vanilla, float delay)
-        {
-            if (delay > 0)
-                yield return new WaitForSeconds(delay);
+                float multiplier = 1.0f;
+                if (EqualizerGroundPlugin.VehicleMultipliers.ContainsKey(key))
+                {
+                    multiplier = EqualizerGroundPlugin.VehicleMultipliers[key].Value;
+                }
 
-            if (hq == null || modded == null || vanilla == null) yield break;
+                int vanillaStock = hq.GetUnitSupply(vanillaDef);
+                int moddedStock = hq.GetUnitSupply(modded);
 
-            string modKey = modded.jsonKey.ToLower();
-            float multiplier = 1.0f;
-            if (EqualizerGroundPlugin.VehicleMultipliers.ContainsKey(modKey))
-            {
-                multiplier = EqualizerGroundPlugin.VehicleMultipliers[modKey].Value;
-            }
+                int targetCap = Mathf.RoundToInt(vanillaStock * multiplier);
+                int addedAmount = Mathf.RoundToInt(1.0f * multiplier);
 
-            int vanillaStock = hq.GetUnitSupply(vanilla);
-            int moddedStock = hq.GetUnitSupply(modded);
-
-            int targetCap = Mathf.RoundToInt(vanillaStock * multiplier);
-            int addedAmount = Mathf.RoundToInt(1.0f * multiplier);
-
-            if (moddedStock < targetCap && addedAmount > 0)
-            {
-                int finalAdd = Mathf.Min(addedAmount, targetCap - moddedStock);
-                Debug.Log($"[EqualizerGround] Ground delivery: adding {finalAdd}x {modded.unitName} to {hq.faction.factionName}");
-                hq.AddSupplyUnit(modded, finalAdd);
+                if (moddedStock < targetCap && addedAmount > 0)
+                {
+                    int finalAdd = Mathf.Min(addedAmount, targetCap - moddedStock);
+                    if (EqualizerGroundPlugin.VerboseLogging.Value)
+                        Debug.Log($"[EqualizerGround] Ground delivery: adding {finalAdd}x {modded.unitName} to {hq.faction.factionName}");
+                    hq.AddSupplyUnit(modded, finalAdd);
+                }
             }
         }
 
@@ -207,7 +203,7 @@ namespace EqualizerGroundMod
             {
                 if (!EqualizerGroundPlugin.Instance.IsFactionAllowed(modded, hq)) continue;
 
-                string key = modded.jsonKey.ToLower();
+                string key = ModdedKeys[modded];
                 if (!EqualizerGroundPlugin.LinkedVanillaUnits.ContainsKey(key)) continue;
 
                 string linkedVanillaName = EqualizerGroundPlugin.LinkedVanillaUnits[key].Value;
@@ -227,7 +223,10 @@ namespace EqualizerGroundMod
                 int moddedStock = hq.GetUnitSupply(modded);
                 if (moddedStock < targetCap)
                 {
-                    hq.AddSupplyUnit(modded, targetCap - moddedStock);
+                    int addAmount = targetCap - moddedStock;
+                    if (EqualizerGroundPlugin.VerboseLogging.Value)
+                        Debug.Log($"[EqualizerGround] Equalized Initial Supply: Adding {addAmount}x {modded.unitName} to {hq.faction.factionName} (Linked to {vanillaDef.unitName})");
+                    hq.AddSupplyUnit(modded, addAmount);
                 }
             }
         }
@@ -249,6 +248,61 @@ namespace EqualizerGroundMod
         {
             if (EqualizerGroundPlugin.EqualizeEnabled != null && !EqualizerGroundPlugin.EqualizeEnabled.Value) return;
             EqualizerGround.HandleProduction(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(VehicleDepot), "TrySpawnVehicle")]
+    public static class VehicleDepot_TrySpawnVehicle_Patch
+    {
+        private static readonly AccessTools.FieldRef<VehicleDepot, float> LastSpawnedTimeRef =
+            AccessTools.FieldRefAccess<VehicleDepot, float>("lastSpawnedTime");
+
+        public static void Postfix(VehicleDepot __instance, VehicleDefinition vehicleDefinition, bool __result)
+        {
+            if (!__result) return;
+            if (EqualizerGroundPlugin.EqualizeEnabled != null && !EqualizerGroundPlugin.EqualizeEnabled.Value) return;
+            if (!EqualizerGround.IsVanilla(vehicleDefinition)) return;
+
+            string vanillaDispName = EqualizerGround.GetVehicleDisplayName(vehicleDefinition);
+
+            FactionHQ hq = __instance.NetworkHQ;
+            if (hq == null) return;
+
+            int delayIndex = 1;
+            foreach (var modded in EqualizerGround.ModdedVehiclesList)
+            {
+                string key = EqualizerGround.ModdedKeys[modded];
+                if (!EqualizerGroundPlugin.LinkedVanillaUnits.ContainsKey(key)) continue;
+
+                string linkedVanillaName = EqualizerGroundPlugin.LinkedVanillaUnits[key].Value;
+                if (linkedVanillaName != vanillaDispName) continue;
+
+                if (!EqualizerGroundPlugin.Instance.IsFactionAllowed(modded, hq)) continue;
+
+                int moddedStock = hq.GetUnitSupply(modded);
+                if (moddedStock > 0)
+                {
+                    EqualizerGroundPlugin.Instance.StartCoroutine(SpawnModdedWithDelay(__instance, modded, vehicleDefinition, 1.5f * delayIndex));
+                    delayIndex++;
+                }
+            }
+        }
+
+        private static IEnumerator SpawnModdedWithDelay(VehicleDepot depot, VehicleDefinition modded, VehicleDefinition vanilla, float delay)
+        {
+            yield return new WaitForSeconds(delay);
+            if (depot == null || modded == null) yield break;
+
+            LastSpawnedTimeRef(depot) = -9999f;
+            bool spawned = depot.TrySpawnVehicle(modded);
+            if (spawned)
+            {
+                LastSpawnedTimeRef(depot) = Time.time;
+                if (EqualizerGroundPlugin.VerboseLogging.Value)
+                {
+                    Debug.Log($"[EqualizerGround] Linked spawn: {modded.unitName} physically spawned alongside {vanilla.unitName}");
+                }
+            }
         }
     }
 }
