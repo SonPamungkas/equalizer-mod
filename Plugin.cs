@@ -13,9 +13,9 @@ namespace EqualizerGroundMod
         public static EqualizerGroundPlugin Instance;
         public static BepInEx.Configuration.ConfigEntry<bool> EqualizeEnabled;
         public static BepInEx.Configuration.ConfigEntry<float> GroundDelayMultiplier;
-        public static Dictionary<string, BepInEx.Configuration.ConfigEntry<bool>> VehicleToggles = new Dictionary<string, BepInEx.Configuration.ConfigEntry<bool>>();
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<int>> FactionRestrictions = new Dictionary<string, BepInEx.Configuration.ConfigEntry<int>>();
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<float>> VehicleMultipliers = new Dictionary<string, BepInEx.Configuration.ConfigEntry<float>>();
+        public static Dictionary<string, BepInEx.Configuration.ConfigEntry<string>> LinkedVanillaUnits = new Dictionary<string, BepInEx.Configuration.ConfigEntry<string>>();
 
         private bool _initialScanDone = false;
 
@@ -41,30 +41,31 @@ namespace EqualizerGroundMod
             }
         }
 
-        public bool IsVehicleEnabled(VehicleDefinition vd)
+        public void InitializeVehicleConfig(VehicleDefinition vd)
         {
-            if (vd == null) return false;
+            if (vd == null) return;
             string key = vd.jsonKey.ToLower();
 
-            if (EqualizerGround.IsVanilla(vd)) return true;
+            if (EqualizerGround.IsVanilla(vd)) return;
 
-            if (!VehicleToggles.ContainsKey(key))
+            if (!LinkedVanillaUnits.ContainsKey(key))
             {
-                Debug.Log($"[EqualizerGround] Binding new vehicle toggle for: {vd.unitName} ({vd.jsonKey})");
+                Debug.Log($"[EqualizerGround] Binding new vehicle config for: {vd.unitName} ({vd.jsonKey})");
                 string pName = vd.unitPrefab != null ? vd.unitPrefab.name : vd.name;
                 string dispName = string.IsNullOrEmpty(vd.unitName) ? pName : $"{vd.unitName} ({pName})";
-                VehicleToggles[key] = Config.Bind("Toggles - Ground Vehicles", $"Equalize {dispName}", true, $"Enable or disable equalization for {dispName}.");
                 
-                FactionRestrictions[key] = Config.Bind("Toggles - Ground Faction Restriction", $"{dispName} Restriction", 0, 
-                    new BepInEx.Configuration.ConfigDescription($"Restriction for {dispName}: 0=Both, 1=No PALA, 2=No BDF", 
-                    new BepInEx.Configuration.AcceptableValueRange<int>(0, 2)));
+                var acceptableValues = new BepInEx.Configuration.AcceptableValueList<string>(EqualizerGround.VanillaVehicleNames.ToArray());
+                LinkedVanillaUnits[key] = Config.Bind("1 - Unit Link", $"{dispName} Linked Vanilla Unit", "None",
+                    new BepInEx.Configuration.ConfigDescription($"Vanilla vehicle to link production with.", acceptableValues));
 
-                VehicleMultipliers[key] = Config.Bind("Multipliers - Ground Vehicles", $"{dispName} Multiplier", 1.0f,
+                VehicleMultipliers[key] = Config.Bind("2 - Multipliers", $"{dispName} Multiplier", 1.0f,
                     new BepInEx.Configuration.ConfigDescription($"Equalization multiplier for {dispName} (0-10)",
                     new BepInEx.Configuration.AcceptableValueRange<float>(0f, 10f)));
-            }
 
-            return VehicleToggles[key].Value;
+                FactionRestrictions[key] = Config.Bind("3 - Faction Restriction", $"{dispName} Restriction", 0, 
+                    new BepInEx.Configuration.ConfigDescription($"Restriction for {dispName}: 0=Both, 1=No PALA, 2=No BDF", 
+                    new BepInEx.Configuration.AcceptableValueRange<int>(0, 2)));
+            }
         }
 
         public bool IsFactionAllowed(VehicleDefinition vd, FactionHQ hq)
@@ -72,7 +73,9 @@ namespace EqualizerGroundMod
             if (vd == null || hq == null || hq.faction == null) return false;
             string key = vd.jsonKey.ToLower();
 
-            if (!IsVehicleEnabled(vd)) return false;
+            if (EqualizerGround.IsVanilla(vd)) return true;
+
+            if (!LinkedVanillaUnits.ContainsKey(key) || LinkedVanillaUnits[key].Value == "None") return false;
 
             int restriction = FactionRestrictions[key].Value;
             if (restriction == 0) return true;
@@ -85,15 +88,11 @@ namespace EqualizerGroundMod
         }
     }
 
-    public class VehiclePriceGroup
-    {
-        public VehicleDefinition VanillaUnit;
-        public List<VehicleDefinition> ModdedVehicles = new List<VehicleDefinition>();
-    }
-
     public static class EqualizerGround
     {
-        public static List<VehiclePriceGroup> PriceGroups = new List<VehiclePriceGroup>();
+        public static Dictionary<string, VehicleDefinition> VanillaVehicleDict = new Dictionary<string, VehicleDefinition>();
+        public static List<string> VanillaVehicleNames = new List<string>();
+        public static List<VehicleDefinition> ModdedVehiclesList = new List<VehicleDefinition>();
 
         private static readonly HashSet<string> VanillaVehicleKeys = new HashSet<string>
         {
@@ -108,32 +107,39 @@ namespace EqualizerGroundMod
             return VanillaVehicleKeys.Contains(key) || (key.Length < 15 && !key.Contains("_") && !key.Contains("."));
         }
 
+        public static string GetVehicleDisplayName(VehicleDefinition vd)
+        {
+            if (vd == null) return "None";
+            string pName = vd.unitPrefab != null ? vd.unitPrefab.name : vd.name;
+            return string.IsNullOrEmpty(vd.unitName) ? pName : $"{vd.unitName} ({pName})";
+        }
+
         public static void ScanVehicles()
         {
             Debug.Log("[EqualizerGround] Scanning for ground vehicle definitions...");
-            PriceGroups.Clear();
 
             var allVehicles = Resources.FindObjectsOfTypeAll<VehicleDefinition>();
             var vanillaVehicles = allVehicles.Where(v => IsVanilla(v)).ToList();
-            var moddedVehicles = allVehicles.Where(v => !IsVanilla(v)).ToList();
+            ModdedVehiclesList = allVehicles.Where(v => !IsVanilla(v)).ToList();
+
+            VanillaVehicleDict.Clear();
+            VanillaVehicleNames.Clear();
+            VanillaVehicleNames.Add("None");
 
             foreach (var vanilla in vanillaVehicles)
             {
-                var group = new VehiclePriceGroup { VanillaUnit = vanilla };
-                float minPrice = vanilla.value * 0.8f;
-                float maxPrice = vanilla.value * 1.2f;
-
-                foreach (var modded in moddedVehicles)
+                string dispName = GetVehicleDisplayName(vanilla);
+                if (!VanillaVehicleDict.ContainsKey(dispName))
                 {
-                    if (modded.value >= minPrice && modded.value <= maxPrice)
-                    {
-                        group.ModdedVehicles.Add(modded);
-                        EqualizerGroundPlugin.Instance.IsVehicleEnabled(modded);
-                    }
+                    VanillaVehicleDict[dispName] = vanilla;
+                    VanillaVehicleNames.Add(dispName);
                 }
-                
-                if (group.ModdedVehicles.Count > 0)
-                    PriceGroups.Add(group);
+            }
+
+            foreach (var modded in ModdedVehiclesList)
+            {
+                // Trigger config generation for modded vehicles
+                EqualizerGroundPlugin.Instance.InitializeVehicleConfig(modded);
             }
         }
 
@@ -143,8 +149,7 @@ namespace EqualizerGroundMod
             if (!(factory.ProductionUnit is VehicleDefinition vanillaDef)) return;
             if (!IsVanilla(vanillaDef)) return;
 
-            var matchingGroup = PriceGroups.FirstOrDefault(g => g.VanillaUnit == vanillaDef);
-            if (matchingGroup == null) return;
+            string vanillaDispName = GetVehicleDisplayName(vanillaDef);
 
             FactionHQ hq = null;
             if (factory.attachedUnit != null) hq = factory.attachedUnit.NetworkHQ;
@@ -153,8 +158,14 @@ namespace EqualizerGroundMod
             float interval = factory.ProductionInterval;
             float delay = interval * EqualizerGroundPlugin.GroundDelayMultiplier.Value;
 
-            foreach (var modded in matchingGroup.ModdedVehicles)
+            foreach (var modded in ModdedVehiclesList)
             {
+                string key = modded.jsonKey.ToLower();
+                if (!EqualizerGroundPlugin.LinkedVanillaUnits.ContainsKey(key)) continue;
+                
+                string linkedVanillaName = EqualizerGroundPlugin.LinkedVanillaUnits[key].Value;
+                if (linkedVanillaName != vanillaDispName) continue;
+
                 if (!EqualizerGroundPlugin.Instance.IsFactionAllowed(modded, hq)) continue;
                 EqualizerGroundPlugin.Instance.StartCoroutine(DelayedDelivery(hq, modded, vanillaDef, delay));
             }
@@ -190,30 +201,33 @@ namespace EqualizerGroundMod
 
         public static void EqualizeInventory(FactionHQ hq)
         {
-            if (PriceGroups.Count == 0) ScanVehicles();
+            if (VanillaVehicleNames.Count <= 1) ScanVehicles();
 
-            foreach (var group in PriceGroups)
+            foreach (var modded in ModdedVehiclesList)
             {
-                int vanillaStock = hq.GetUnitSupply(group.VanillaUnit);
+                if (!EqualizerGroundPlugin.Instance.IsFactionAllowed(modded, hq)) continue;
+
+                string key = modded.jsonKey.ToLower();
+                if (!EqualizerGroundPlugin.LinkedVanillaUnits.ContainsKey(key)) continue;
+
+                string linkedVanillaName = EqualizerGroundPlugin.LinkedVanillaUnits[key].Value;
+                if (linkedVanillaName == "None" || !VanillaVehicleDict.ContainsKey(linkedVanillaName)) continue;
+
+                VehicleDefinition vanillaDef = VanillaVehicleDict[linkedVanillaName];
+                int vanillaStock = hq.GetUnitSupply(vanillaDef);
                 if (vanillaStock <= 0) continue;
 
-                foreach (var modded in group.ModdedVehicles)
+                float multiplier = 1.0f;
+                if (EqualizerGroundPlugin.VehicleMultipliers.ContainsKey(key))
                 {
-                    if (!EqualizerGroundPlugin.Instance.IsFactionAllowed(modded, hq)) continue;
+                    multiplier = EqualizerGroundPlugin.VehicleMultipliers[key].Value;
+                }
 
-                    string modKey = modded.jsonKey.ToLower();
-                    float multiplier = 1.0f;
-                    if (EqualizerGroundPlugin.VehicleMultipliers.ContainsKey(modKey))
-                    {
-                        multiplier = EqualizerGroundPlugin.VehicleMultipliers[modKey].Value;
-                    }
-
-                    int targetCap = Mathf.RoundToInt(vanillaStock * multiplier);
-                    int moddedStock = hq.GetUnitSupply(modded);
-                    if (moddedStock < targetCap)
-                    {
-                        hq.AddSupplyUnit(modded, targetCap - moddedStock);
-                    }
+                int targetCap = Mathf.RoundToInt(vanillaStock * multiplier);
+                int moddedStock = hq.GetUnitSupply(modded);
+                if (moddedStock < targetCap)
+                {
+                    hq.AddSupplyUnit(modded, targetCap - moddedStock);
                 }
             }
         }
