@@ -15,11 +15,11 @@
 
   <ItemGroup>
     <Reference Include="Assembly-CSharp">
-      <HintPath>..\game\Assembly-CSharp.dll</HintPath>
+      <HintPath>..\..\COMPILER_HERE\game\Assembly-CSharp.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="Mirage">
-      <HintPath>..\game\Mirage.dll</HintPath>
+      <HintPath>..\..\COMPILER_HERE\game\Mirage.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>
