@@ -15,7 +15,6 @@ namespace EqualizerMod
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<int>> FactionRestrictions = new Dictionary<string, BepInEx.Configuration.ConfigEntry<int>>();
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<float>> EqualizeMultipliers = new Dictionary<string, BepInEx.Configuration.ConfigEntry<float>>();
 
-        private bool _initialScanDone = false;
 
         private void Awake()
         {
@@ -50,15 +49,7 @@ namespace EqualizerMod
             return true;
         }
 
-        private void Update()
-        {
-            if (!_initialScanDone && Time.time > 10f)
-            {
-                EqualizerLogic.ScanAircraft();
-                _initialScanDone = true;
-                Logger.LogInfo("Initial aircraft scan complete.");
-            }
-        }
+
 
         public bool IsAircraftEnabled(AircraftDefinition ac)
         {
