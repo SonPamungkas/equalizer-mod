@@ -14,11 +14,11 @@ namespace EqualizerGroundMod
         public static BepInEx.Configuration.ConfigEntry<bool> EqualizeEnabled;
         public static BepInEx.Configuration.ConfigEntry<bool> VerboseLogging;
         public static BepInEx.Configuration.ConfigEntry<float> SpawnDelay;
+        public static BepInEx.Configuration.ConfigEntry<bool> EnableSideSpawn;
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<int>> FactionRestrictions = new Dictionary<string, BepInEx.Configuration.ConfigEntry<int>>();
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<float>> VehicleMultipliers = new Dictionary<string, BepInEx.Configuration.ConfigEntry<float>>();
         public static Dictionary<string, BepInEx.Configuration.ConfigEntry<string>> LinkedVanillaUnits = new Dictionary<string, BepInEx.Configuration.ConfigEntry<string>>();
 
-        private bool _initialScanDone = false;
 
         private void Awake()
         {
@@ -27,21 +27,14 @@ namespace EqualizerGroundMod
             EqualizeEnabled = Config.Bind("General", "Equalize Enabled", true, "Global toggle for the ground vehicle equalization logic.");
             VerboseLogging = Config.Bind("General", "Verbose Logging", false, "Enable verbose logging for deliveries and spawns.");
             SpawnDelay = Config.Bind("General", "Spawn Delay", 1.5f, "Delay between staggered modded ground vehicle physical spawns (in seconds).");
+            EnableSideSpawn = Config.Bind("General", "Enable Side Spawn", true, "If enabled, modded linked units will spawn to the side of the depot instead of the front door.");
 
             var harmony = new Harmony("com.equalizer.ground");
             harmony.PatchAll();
             Logger.LogInfo("Equalizer Mod (Ground Vehicles) loaded!");
         }
 
-        private void Update()
-        {
-            if (!_initialScanDone && Time.time > 10f)
-            {
-                EqualizerGround.ScanVehicles();
-                _initialScanDone = true;
-                Logger.LogInfo("Initial vehicle scan complete.");
-            }
-        }
+
 
         public void InitializeVehicleConfig(VehicleDefinition vd)
         {
@@ -239,6 +232,7 @@ namespace EqualizerGroundMod
     {
         public static void Postfix(FactionHQ __instance)
         {
+            if (EqualizerGroundPlugin.EqualizeEnabled != null && !EqualizerGroundPlugin.EqualizeEnabled.Value) return;
             EqualizerGround.EqualizeInventory(__instance);
         }
     }
@@ -258,6 +252,9 @@ namespace EqualizerGroundMod
     {
         private static readonly AccessTools.FieldRef<VehicleDepot, float> LastSpawnedTimeRef =
             AccessTools.FieldRefAccess<VehicleDepot, float>("lastSpawnedTime");
+
+        private static readonly AccessTools.FieldRef<VehicleDepot, Transform> SpawnTransformRef =
+            AccessTools.FieldRefAccess<VehicleDepot, Transform>("spawnTransform");
 
         public static void Postfix(VehicleDepot __instance, VehicleDefinition vehicleDefinition, bool __result)
         {
@@ -284,22 +281,49 @@ namespace EqualizerGroundMod
                 int moddedStock = hq.GetUnitSupply(modded);
                 if (moddedStock > 0)
                 {
-                    EqualizerGroundPlugin.Instance.StartCoroutine(SpawnModdedWithDelay(__instance, modded, vehicleDefinition, EqualizerGroundPlugin.SpawnDelay.Value * delayIndex));
+                    EqualizerGroundPlugin.Instance.StartCoroutine(SpawnModdedWithDelay(__instance, modded, vehicleDefinition, EqualizerGroundPlugin.SpawnDelay.Value * delayIndex, delayIndex));
                     delayIndex++;
                 }
             }
         }
 
-        private static IEnumerator SpawnModdedWithDelay(VehicleDepot depot, VehicleDefinition modded, VehicleDefinition vanilla, float delay)
+        private static IEnumerator SpawnModdedWithDelay(VehicleDepot depot, VehicleDefinition modded, VehicleDefinition vanilla, float delay, int spawnIndex)
         {
             yield return new WaitForSeconds(delay);
             if (depot == null || modded == null) yield break;
 
-            LastSpawnedTimeRef(depot) = -9999f;
-            bool spawned = depot.TrySpawnVehicle(modded);
-            if (spawned)
+            Transform spawnTransform = SpawnTransformRef(depot);
+            Vector3 originalPos = spawnTransform.position;
+
+            if (EqualizerGroundPlugin.EnableSideSpawn != null && EqualizerGroundPlugin.EnableSideSpawn.Value)
             {
-                LastSpawnedTimeRef(depot) = Time.time;
+                // Anchor on the door (spawnTransform) instead of depot center, so it's at ground level
+                Vector3 anchorRight = spawnTransform.right; anchorRight.y = 0; anchorRight.Normalize();
+                Vector3 anchorForward = spawnTransform.forward; anchorForward.y = 0; anchorForward.Normalize();
+                
+                // negative x 20 (left side), with front/rear clearance based on spawnIndex
+                float zOffset = -(spawnIndex - 1) * 12f;
+                Vector3 worldOffset = (anchorRight * -20f) + (anchorForward * zOffset);
+                
+                GlobalPosition spawnPos = GlobalPositionExtensions.ToGlobalPosition(spawnTransform.position) + worldOffset;
+                Quaternion randomRot = Quaternion.Euler(0, spawnTransform.eulerAngles.y, 0);
+
+                FactionHQ hq = null;
+                var unit = depot.GetComponent<Unit>();
+                if (unit != null) hq = unit.MapHQ ?? unit.NetworkHQ;
+
+                Spawner.i.SpawnVehicle(modded.unitPrefab, spawnPos, randomRot, Vector3.zero, hq, $"ModdedUnit_{System.Guid.NewGuid().ToString().Substring(0,4)}", 0f, false, null);
+                yield break;
+            }
+
+            float prevTime = LastSpawnedTimeRef(depot);
+            LastSpawnedTimeRef(depot) = -9999f;
+            bool spawnedFlag = depot.TrySpawnVehicle(modded);
+            LastSpawnedTimeRef(depot) = prevTime;
+            
+            if (spawnedFlag)
+            {
+                Debug.Log($"[EqualizerGround] Linked unit {modded.unitName} successfully spawned at {depot.unitName}.");
                 if (EqualizerGroundPlugin.VerboseLogging.Value)
                 {
                     Debug.Log($"[EqualizerGround] Linked spawn: {modded.unitName} physically spawned alongside {vanilla.unitName}");
