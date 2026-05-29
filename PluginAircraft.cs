@@ -132,6 +132,26 @@ namespace EqualizerMod
             return VanillaKeys.Contains(ac.jsonKey.ToLower());
         }
 
+        private static bool IsSegregated(AircraftDefinition definition)
+        {
+            if (definition == null) return false;
+
+            if (!string.IsNullOrEmpty(definition.jsonKey) && definition.jsonKey.StartsWith("kar_", System.StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (!string.IsNullOrEmpty(definition.name) && definition.name.StartsWith("kar_", System.StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (!string.IsNullOrEmpty(definition.jsonKey) && definition.jsonKey.StartsWith("bote_", System.StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (!string.IsNullOrEmpty(definition.name) && definition.name.StartsWith("bote_", System.StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (definition.unitPrefab != null && definition.unitPrefab.GetComponent("ShipPartBridge") != null)
+                return true;
+
+            return false;
+        }
+
         public static void ScanAircraft()
         {
             Debug.Log("[EqualizerMod] Scanning for aircraft definitions...");
@@ -140,7 +160,13 @@ namespace EqualizerMod
             var allAircraft = Resources.FindObjectsOfTypeAll<AircraftDefinition>();
             foreach (var ac in allAircraft)
             {
-                if (ac.aircraftParameters == null) continue;
+                if (ac == null || ac.aircraftParameters == null) continue;
+
+                if (IsSegregated(ac))
+                {
+                    Debug.Log($"[EqualizerMod] Skipping segregated aircraft {ac.jsonKey ?? ac.name}");
+                    continue;
+                }
 
                 int rank = ac.aircraftParameters.rankRequired;
                 bool isModded = !IsVanilla(ac);
