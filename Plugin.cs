@@ -1,3 +1,4 @@
+using System;
 using BepInEx;
 using HarmonyLib;
 using UnityEngine;
@@ -7,7 +8,7 @@ using System.Linq;
 
 namespace EqualizerMod
 {
-    [BepInPlugin("com.equalizer.unified", "Equalizer Mod", "2.2.0")]
+    [BepInPlugin("com.equalizer.unified", "Equalizer Mod", "2.3.0")]
     public class EqualizerPlugin : BaseUnityPlugin
     {
         public static EqualizerPlugin Instance;
@@ -42,7 +43,7 @@ namespace EqualizerMod
 
             var harmony = new Harmony("com.equalizer.unified");
             harmony.PatchAll();
-            Logger.LogInfo("Equalizer Mod v2.2.0 loaded!");
+            Logger.LogInfo("Equalizer Mod v2.3.0 loaded!");
         }
 
         public bool IsAircraftAllowed(AircraftDefinition ac, FactionHQ hq)
@@ -96,8 +97,7 @@ namespace EqualizerMod
             if (!AircraftToggles.ContainsKey(key))
             {
                 Debug.Log($"[EqualizerMod] Binding new aircraft config for: {ac.unitName} ({ac.jsonKey})");
-                string pName = ac.unitPrefab != null ? ac.unitPrefab.name : ac.name;
-                string dispName = string.IsNullOrEmpty(ac.unitName) ? pName : $"{ac.unitName} ({pName})";
+                string dispName = EqualizerLogic.GetAircraftDisplayName(ac);
                 AircraftToggles[key] = Config.Bind("Aircraft Toggles", $"Equalize {dispName}", true, $"Enable or disable equalization for {dispName}.");
                 
                 AircraftRestrictions[key] = Config.Bind("Aircraft Restrictions", $"{dispName} Restriction", 0, 
@@ -120,9 +120,8 @@ namespace EqualizerMod
             if (!GroundLinkedUnits.ContainsKey(key))
             {
                 Debug.Log($"[EqualizerMod] Binding new ground config for: {vd.unitName} ({vd.jsonKey})");
-                string pName = vd.unitPrefab != null ? vd.unitPrefab.name : vd.name;
-                string dispName = string.IsNullOrEmpty(vd.unitName) ? pName : $"{vd.unitName} ({pName})";
-                
+                string dispName = EqualizerLogic.GetVehicleDisplayName(vd);
+
                 var acceptableValues = new BepInEx.Configuration.AcceptableValueList<string>(EqualizerLogic.VanillaVehicleNames.ToArray());
                 GroundLinkedUnits[key] = Config.Bind("Ground Links", $"{dispName} Linked Vanilla Unit", "None",
                     new BepInEx.Configuration.ConfigDescription($"Vanilla vehicle to link production with.", acceptableValues));
@@ -358,8 +357,13 @@ namespace EqualizerMod
         public static string GetVehicleDisplayName(VehicleDefinition vd)
         {
             if (vd == null) return "None";
-            string pName = vd.unitPrefab != null ? vd.unitPrefab.name : vd.name;
-            return string.IsNullOrEmpty(vd.unitName) ? pName : $"{vd.unitName} ({pName})";
+            return string.IsNullOrEmpty(vd.unitName) ? vd.jsonKey : $"{vd.unitName} ({vd.jsonKey})";
+        }
+
+        public static string GetAircraftDisplayName(AircraftDefinition ac)
+        {
+            if (ac == null) return "None";
+            return string.IsNullOrEmpty(ac.unitName) ? ac.jsonKey : $"{ac.unitName} ({ac.jsonKey})";
         }
 
         public static void ScanAircraft()
@@ -389,12 +393,25 @@ namespace EqualizerMod
                 if (isModded)
                 {
                     TierInfoMap[rank].ModdedAircraft.Add(ac);
-                    EqualizerPlugin.Instance.BindAircraftConfig(ac);
                 }
                 else
                 {
                     TierInfoMap[rank].VanillaAircraft.Add(ac);
                 }
+            }
+
+            var allModdedAircraft = new List<AircraftDefinition>();
+            foreach (var tier in TierInfoMap.Values)
+            {
+                tier.ModdedAircraft = tier.ModdedAircraft
+                    .OrderBy(a => GetAircraftDisplayName(a), StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                allModdedAircraft.AddRange(tier.ModdedAircraft);
+            }
+
+            foreach (var ac in allModdedAircraft.OrderBy(a => GetAircraftDisplayName(a), StringComparer.OrdinalIgnoreCase))
+            {
+                EqualizerPlugin.Instance.BindAircraftConfig(ac);
             }
         }
 
@@ -404,11 +421,12 @@ namespace EqualizerMod
 
             var allVehicles = Resources.FindObjectsOfTypeAll<VehicleDefinition>();
             var vanillaVehicles = allVehicles.Where(v => IsVanillaGround(v)).ToList();
-            ModdedVehiclesList = allVehicles.Where(v => !IsVanillaGround(v)).ToList();
+            ModdedVehiclesList = allVehicles.Where(v => !IsVanillaGround(v))
+                .OrderBy(v => GetVehicleDisplayName(v), StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
             VanillaVehicleDict.Clear();
             VanillaVehicleNames.Clear();
-            VanillaVehicleNames.Add("None");
 
             foreach (var vanilla in vanillaVehicles)
             {
@@ -416,9 +434,11 @@ namespace EqualizerMod
                 if (!VanillaVehicleDict.ContainsKey(dispName))
                 {
                     VanillaVehicleDict[dispName] = vanilla;
-                    VanillaVehicleNames.Add(dispName);
                 }
             }
+
+            VanillaVehicleNames.Add("None");
+            VanillaVehicleNames.AddRange(VanillaVehicleDict.Keys.OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
 
             foreach (var modded in ModdedVehiclesList)
             {
